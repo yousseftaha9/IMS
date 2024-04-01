@@ -20,6 +20,6 @@ router.delete("/remove/:username", remove);
 router.patch("/update/:username/:password", updateUser);
 
 router.get("/", verifyToken, getUser);
-router.get("/refresh", refreshToken, verifyToken, getUser);
+router.get("/refresh", refreshToken);
 
 module.exports = router;

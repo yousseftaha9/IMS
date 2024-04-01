@@ -2,6 +2,7 @@ const bcrypt = require("bcrypt");
 const validator = require("validator");
 const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
+const { v4: uuidv4 } = require("uuid");
 
 const User = require("../models/userModel.js");
 
@@ -32,17 +33,24 @@ const login = async function (req, res) {
     if (!isValidPassword) {
       throw Error("wrong password");
     }
+    const refreshToken = uuidv4();
+    user.refreshToken = refreshToken;
+    await user.save();
     const token = createToken(user._id);
 
     if (req.cookies[`${user._id}`]) {
       req.cookies[`${user._id}`] = "";
     }
-
-    res.cookie("sessionToken", token, {
-      path: "/",
-      expires: new Date(Date.now() + 1000 * 3000), // 30 seconds
+    res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
-      sameSite: "lax",
+      // secure: false,
+      // domain: '.example.com',
+      domain: ".app.localhost",
+      // path: '/admin',
+      maxAge: 7 * 24 * 60 * 60 * 1000, // Expires in 24 hours
+      // sameSite: 'strict',
+      // signed: true,
+      overwrite: true,
     });
     res.status(200).json({ user, token });
   } catch (error) {
@@ -68,15 +76,24 @@ const register = async function (req, res) {
     const hash = await bcrypt.hash(password, salt);
     const user = await User.create({ username, password: hash, role });
     const token = createToken(user._id);
+    const refreshToken = uuidv4();
+    user.refreshToken = refreshToken;
+    await user.save();
     if (req.cookies[`${user._id}`]) {
       req.cookies[`${user._id}`] = "";
     }
 
-    res.cookie("sessionToken", token, {
-      path: "/",
-      expires: new Date(Date.now() + 1000 * 3000), // 30 seconds
+    res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
-      sameSite: "lax",
+      secure: false,
+      // domain: '.example.com',
+      domain: ".app.localhost",
+
+      // path: '/admin',
+      maxAge: 7 * 24 * 60 * 60 * 1000, // Expires in 24 hours
+      // sameSite: 'strict',
+      // signed: true,
+      overwrite: true,
     });
     return res.status(200).json({ user, token });
   } catch (error) {
@@ -186,37 +203,60 @@ const getUser = async (req, res, next) => {
   return res.status(200).json({ user });
 };
 
-const refreshToken = (req, res, next) => {
-  const cookies = req.cookies.cookie;
-  console.log(cookies);
-  const prevToken = cookies.split("=")[1];
-  if (!prevToken) {
-    return res.status(400).json({ message: "Couldn't find token" });
+// const refreshToken = (req, res, next) => {
+//   const cookies = req.cookies.cookie;
+//   console.log(cookies);
+//   const prevToken = cookies.split("=")[1];
+//   if (!prevToken) {
+//     return res.status(400).json({ message: "Couldn't find token" });
+//   }
+//   console.log(prevToken);
+//   jwt.verify(String(prevToken), process.env.SECRET, (err, user) => {
+//     if (err) {
+//       console.log(err);
+//       return res.status(403).json({ message: "Authentication failed" });
+//     }
+//     res.clearCookie(`${user.id}`);
+//     req.cookies[`${user.id}`] = "";
+
+//     const token = jwt.sign({ id: user.id }, process.env.SECRET, {
+//       expiresIn: "1h",
+//     });
+//     console.log("Regenerated Token\n", token);
+
+//     res.cookie("sessionToken", token, {
+//       path: "/",
+//       expires: new Date(Date.now() + 1000 * 3000), // 30 seconds
+//       httpOnly: true,
+//       sameSite: "none",
+//     });
+
+//     req.id = user.id;
+//     next();
+//   });
+// };
+
+const refreshToken = async function (req, res) {
+  const sessionToken = req.cookies.refreshToken;
+  console.log(sessionToken);
+  if (!sessionToken) {
+    return res.status(401).json({ message: "Not authenticated." });
   }
-  console.log(prevToken);
-  jwt.verify(String(prevToken), process.env.SECRET, (err, user) => {
-    if (err) {
-      console.log(err);
-      return res.status(403).json({ message: "Authentication failed" });
+  try {
+    const user = await User.findOne({ refreshToken: sessionToken });
+    if (!user) {
+      return res.status(400).json({ message: "Invalid token" });
     }
-    res.clearCookie(`${user.id}`);
-    req.cookies[`${user.id}`] = "";
-
-    const token = jwt.sign({ id: user.id }, process.env.SECRET, {
-      expiresIn: "1h",
-    });
-    console.log("Regenerated Token\n", token);
-
-    res.cookie("sessionToken", token, {
-      path: "/",
-      expires: new Date(Date.now() + 1000 * 3000), // 30 seconds
-      httpOnly: true,
-      // sameSite: "lax",
-    });
-
-    req.id = user.id;
-    next();
-  });
+    const accessToken = createToken(user._id);
+    res.status(200).json({ user, accessToken });
+    res.id = user._id;
+  } catch (error) {
+    if (error.name === "MongooseError") {
+      res.status(500).json({ error: "Internal server error" });
+    } else {
+      res.status(400).json({ error: error.message });
+    }
+  }
 };
 
 const logout = (req, res, next) => {
